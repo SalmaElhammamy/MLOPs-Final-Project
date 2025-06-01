@@ -1,109 +1,64 @@
-async function getPredictedLabel(processed_t) {
-  try {
-    console.log(`[${new Date().toLocaleTimeString()}] Starting prediction...`);
-    console.log(`[${new Date().toLocaleTimeString()}] Input processed_t:`, processed_t);
-    console.log(`[${new Date().toLocaleTimeString()}] Input length:`, processed_t.length);
-
-    // Validate input
-    if (!processed_t || processed_t.length !== 21) {
-      console.error('Invalid input: Expected 21 landmarks, got:', processed_t?.length);
-      return null;
-    }
-
-    // Flatten the landmarks array with better error handling
-    const flattenedData = [];
-    for (let i = 0; i < processed_t.length; i++) {
-      const point = processed_t[i];
-      
-      // Validate each point has required properties
-      if (!point || typeof point.x !== 'number' || typeof point.y !== 'number' || typeof point.z !== 'number') {
-        console.error(`Invalid landmark at index ${i}:`, point);
-        return null;
-      }
-      
-      // Add coordinates in order: x, y, z
-      flattenedData.push(point.x, point.y, point.z);
-    }
-
-    console.log(`[${new Date().toLocaleTimeString()}] Flattened data length:`, flattenedData.length);
-    console.log(`[${new Date().toLocaleTimeString()}] First few values:`, flattenedData.slice(0, 9));
-    
-    // Additional preprocessing that might be needed
-    // Normalize coordinates relative to wrist (landmark 0) - this is common in hand gesture recognition
-    const wrist = processed_t[0];
-    const normalizedData = [];
-    
-    for (let i = 0; i < processed_t.length; i++) {
-      const point = processed_t[i];
-      normalizedData.push(
-        point.x - wrist.x,  // Relative x
-        point.y - wrist.y,  // Relative y
-        point.z - wrist.z   // Relative z
-      );
-    }
-    
-    console.log(`[${new Date().toLocaleTimeString()}] Normalized data (first 9):`, normalizedData.slice(0, 9));
-    
-    // Try both approaches - let's start with the normalized approach since it's more common
-    const dataToSend = normalizedData;
-    
-    console.log(`[${new Date().toLocaleTimeString()}] Making API call to backend...`);
-
-    // Call your backend API
-    const response = await fetch('https://idmiunzktedg.us-east-1.clawcloudrun.com/predict', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ landmarks: dataToSend })
-    });
-
-    if (!response.ok) {
-      console.error('API error:', response.status, response.statusText);
-      const errorText = await response.text();
-      console.error('Error details:', errorText);
-      return null;
-    }
-
-    const result = await response.json();
-    console.log(`[${new Date().toLocaleTimeString()}] Full API response:`, result);
-    console.log(`[${new Date().toLocaleTimeString()}] Predicted direction from API:`, result.prediction);
-
-    // Return one of the labels expected by the frontend or null if unknown
-    const validLabels = ["up", "down", "left", "right"];
-    if (validLabels.includes(result.prediction)) {
-      console.log(`[${new Date().toLocaleTimeString()}] ✅ Valid prediction:`, result.prediction);
-      return result.prediction;
-    } else {
-      console.log(`[${new Date().toLocaleTimeString()}] ❌ Invalid prediction:`, result.prediction);
-      return null;
-    }
-
-  } catch (error) {
-    console.error('Error calling prediction API:', error);
-    return null;
+// Helper function: normalize landmarks before sending
+function normalizeLandmarks(landmarks) {
+  if (!landmarks || landmarks.length !== 21) {
+    // Return empty or raw if incorrect input
+    return landmarks;
   }
+
+  // Step 1: Get wrist (landmark 0)
+  const wrist = landmarks[0];
+
+  // Step 2: Get mid-finger tip (landmark 9)
+  const midFingerTip = landmarks[9];
+
+  // Calculate scale:
+  // Distance between wrist and mid-finger tip
+  function distance3D(a, b) {
+    return Math.sqrt(
+      (a.x - b.x) ** 2 +
+      (a.y - b.y) ** 2 +
+      (a.z - b.z) ** 2
+    );
+  }
+
+  const scale1 = distance3D(wrist, midFingerTip);
+
+  // Max distance from wrist among all landmarks
+  let maxDist = 0;
+  for (const point of landmarks) {
+    const dist = distance3D(wrist, point);
+    if (dist > maxDist) maxDist = dist;
+  }
+
+  const scale = Math.max(scale1, maxDist);
+
+  if (scale === 0 || isNaN(scale)) {
+    // Avoid division by zero
+    return landmarks.map(p => ({...p}));
+  }
+
+  // Normalize landmarks: (point - wrist) / scale
+  const normalized = landmarks.map(point => ({
+    x: (point.x - wrist.x) / scale,
+    y: (point.y - wrist.y) / scale,
+    z: (point.z - wrist.z) / scale,
+  }));
+
+  return normalized;
 }
 
-// Alternative function to try if the first approach doesn't work
-async function getPredictedLabelAlternative(processed_t) {
+async function getPredictedLabel(processed_t) {
   try {
-    console.log(`[${new Date().toLocaleTimeString()}] Trying alternative approach...`);
-    
-    if (!processed_t || processed_t.length !== 21) {
-      console.error('Invalid input: Expected 21 landmarks, got:', processed_t?.length);
-      return null;
-    }
+    // Normalize landmarks before flattening
+    const normalizedLandmarks = normalizeLandmarks(processed_t);
 
-    // Try absolute coordinates (original approach)
+    // Flatten normalized landmarks into array [x0, y0, z0, x1, y1, z1, ...]
     const flattenedData = [];
-    for (let i = 0; i < processed_t.length; i++) {
-      const point = processed_t[i];
+    for (let i = 0; i < normalizedLandmarks.length; i++) {
+      const point = normalizedLandmarks[i];
       flattenedData.push(point.x, point.y, point.z);
     }
 
-    console.log(`[${new Date().toLocaleTimeString()}] Alternative - using absolute coordinates`);
-    
     const response = await fetch('https://idmiunzktedg.us-east-1.clawcloudrun.com/predict', {
       method: 'POST',
       headers: {
@@ -118,30 +73,18 @@ async function getPredictedLabelAlternative(processed_t) {
     }
 
     const result = await response.json();
-    console.log(`[${new Date().toLocaleTimeString()}] Alternative API response:`, result);
+
+    console.log('Predicted label from API:', result.prediction);
 
     const validLabels = ["up", "down", "left", "right"];
-    return validLabels.includes(result.prediction) ? result.prediction : null;
 
+    if (result.prediction && validLabels.includes(result.prediction.toLowerCase())) {
+      return result.prediction.toLowerCase();
+    } else {
+      return null;
+    }
   } catch (error) {
-    console.error('Error in alternative prediction API:', error);
+    console.error('Error calling prediction API:', error);
     return null;
   }
-}
-
-// Function to test both approaches
-async function getPredictedLabelWithFallback(processed_t) {
-  // Try normalized approach first
-  let prediction = await getPredictedLabel(processed_t);
-  
-  // If we get 'down' for everything or null, try the alternative
-  if (!prediction || prediction === 'down') {
-    console.log(`[${new Date().toLocaleTimeString()}] Trying alternative approach...`);
-    const altPrediction = await getPredictedLabelAlternative(processed_t);
-    if (altPrediction && altPrediction !== 'down') {
-      return altPrediction;
-    }
-  }
-  
-  return prediction;
 }
